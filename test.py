@@ -1,0 +1,280 @@
+from typing import Dict, Tuple, Optional, Any, cast, List
+from fake_useragent import UserAgent
+import requests
+import re
+import asyncio
+from json import dump
+
+# Example raw data:
+# {'id': '0000000146', 'name': {'givenName': 'Martin', 'familyName': 'Sheen', 'middleName': None}}
+class CastAndCrew:
+  def __init__(self, raw_data: dict) -> None:
+    self.id = cast(Optional[str], raw_data['id'])
+    if 'name' not in raw_data or not raw_data['name']:
+      return
+    self.givenName = cast(str, raw_data['name']['givenName'] or '')
+    self.middleName = cast(str, raw_data['name']['middleName'] or '')
+    self.familyName = cast(str, raw_data['name']['familyName'] or '')
+    self.name = ' '.join(filter(lambda x: x, (raw_data['name']['givenName'], raw_data['name']['middleName'], raw_data['name']['familyName'])))
+    self.roles: List[str] = []
+
+  def set_roles(self, roles: List[str]):
+    self.roles = roles
+
+# Example raw data:
+# {id: "HO00000006", classification: {text: "15", translations: []}, classificationDescription: {text: "15", translations: []}}
+class CensorRating:
+  def __init__(self, raw_data: dict) -> None:
+    self.id = cast(Optional[str], raw_data['id'])
+    if raw_data.get('classificationDescription'):
+      # TODO: properly type
+      if cast(Any, raw_data.get('classificationDescription')).get('text'):
+        self.classification = cast(Optional[str], raw_data['classificationDescription']['text'])
+
+  def set_note(self, note: str) -> None:
+    self.note = note
+
+# Example raw data:
+# {id: "0000000002", name: {text: "Drama", translations: []}, description: {text: "Drama", translations: []}}
+class Genre:
+  def __init__(self, raw_data: dict) -> None:
+    self.id = cast(Optional[str], raw_data['id'])
+    if raw_data.get('name'):
+      self.name = cast(Optional[str], raw_data['name']['text'])
+    if raw_data.get('description'):
+      self.description = cast(Optional[str], raw_data['description']['text'])
+
+# Example raw data:
+# {
+#     "id": "HO00005424",
+#     "title": {
+#         "text": "Deadpool & Wolverine",
+#         "translations": []
+#     },
+#     "synopsis": {
+#         "text": "Deadpool's peaceful existence comes crashing down when the Time Variance Authority recruits him to help safeguard the multiverse.",
+#         "translations": []
+#     },
+#     "shortSynopsis": {
+#         "text": "Deadpool's peaceful existence comes crashing down when the Time Variance Authority recruits him to help safeguard the multiverse.",
+#         "translations": []
+#     },
+#     "censorRatingId": "HO00000006",
+#     "censorRatingNote": {
+#         "text": "strong bloody violence, injury detail, sex references, very strong language",
+#         "translations": []
+#     },
+#     "releaseDate": "2024-07-25",
+#     "runtimeInMinutes": 128,
+#     "trailerUrl": null,
+#     "displayPriority": 1,
+#     "castAndCrew": [
+#         {
+#             "castAndCrewMemberId": "0000000316",
+#             "roles": [
+#                 "Actor"
+#             ]
+#         },
+#         ...
+#     ],
+#     "genreIds": [
+#         "0000000003",
+#         ...
+#     ],
+#     "externalIds": {
+#         "moviexchangeReleaseId": "00ee5871-dbed-4813-8461-8ebd59921981",
+#         "corporateId": null
+#     },
+#     "hopk": "HO00005424",
+#     "hoCode": "A000006717",
+#     "eventId": null,
+#     "distributorName": "Walt Disney Studios Motion Pictures - UK"
+# }
+class Film:
+  # Data passed through from Curzon via dependency injection
+  def __init__(self, raw_data: dict, all_cast_and_crew: Dict[str, CastAndCrew], ratings: Dict[str, CensorRating], all_genres: Dict[str, Genre]) -> None:
+    self.id = cast(Optional[str], raw_data.get('id'))
+    self.title = cast(Optional[str], raw_data.get('title', {}).get('text') if raw_data.get('title') else None)
+    self.synopsis = cast(Optional[str], raw_data.get('synopsis', {}).get('text') if raw_data.get('synopsis') else None)
+    self.shortSynopsis = cast(Optional[str], raw_data.get('shortSynopsis', {}).get('text') if raw_data.get('shortSynopsis') else None)
+
+    self.released = cast(Optional[str], raw_data.get('releaseDate'))
+    self.runtime = cast(Optional[int], raw_data.get('runtimeInMinutes'))
+
+    self.trailerUri = cast(Optional[int], raw_data.get('trailerUrl'))
+    self.displayPriority = cast(Optional[int], raw_data.get('displayPriority'))
+
+    rating_id = raw_data.get('censorRatingId')
+    self.rating: Optional[CensorRating] = ratings.get(rating_id) if rating_id else None
+
+    rating_note = (raw_data.get('censorRatingNote', {}) or {}).get('text')
+    if rating_note and 'text' in rating_note and self.rating:
+      self.rating.set_note(rating_note['text'])
+
+    self.cast_and_crew = cast(List[CastAndCrew], [])
+    raw_cast_and_crew = raw_data.get('castAndCrew')
+    if raw_cast_and_crew:
+      for raw_entity in raw_cast_and_crew:
+        id = raw_entity.get('castAndCrewMemberId')
+        if not id:
+          continue
+        entity = all_cast_and_crew.get(id)
+        if not entity:
+          continue
+        if raw_entity.get('roles'):
+          entity.set_roles(raw_entity.get('roles'))
+        self.cast_and_crew.append(entity)
+
+    self.genres = cast(List[Genre], [])
+    genre_ids = cast(Optional[List[str]], raw_data.get('genreIds'))
+    if genre_ids:
+      for id in genre_ids:
+        genre = all_genres.get(id)
+        if not genre:
+          continue
+        self.genres.append(genre)
+
+    external_ids = raw_data.get('externalIds')
+    if external_ids:
+      self.moviexchange_id = cast(Optional[str], external_ids.get('moviexchangeReleaseId'))
+      self.corporate_id = cast(Optional[str], external_ids.get('corporateId'))
+
+    self.hopk = cast(Optional[str], raw_data.get('hopk'))
+    self.hoCode = cast(Optional[str], raw_data.get('hoCode'))
+
+    self.distributor = cast(Optional[str], raw_data.get('distributorName'))
+    # TODO: implement event
+
+# Example raw data:
+# {
+#     "id": "ALD1",
+#     "name": {
+#         "text": "Aldgate",
+#         "translations": []
+#     },
+#     "location": {
+#         "latitude": 51.5139,
+#         "longitude": -0.069
+#     },
+#     "contactDetails": {
+#         "phoneNumbers": [],
+#         "email": "",
+#         "address": {
+#             "line1": "2 Canter Way,",
+#             "line2": "London,",
+#             "city": " E1 8PS"
+#         }
+#     },
+#     "ianaTimeZoneName": "Europe/London"
+# }
+class Site:
+  def __init__(self, raw_data) -> None:
+    self.id = cast(Optional[str], raw_data.get('id'))
+    if raw_data.get('name'):
+      self.name = cast(Optional[str], raw_data['name']['text'])
+
+    location = raw_data.get('location')
+    self.location = {}
+    if location:
+      lat = location.get('latitude')
+      if lat:
+        self.location['latitude'] = lat
+      lon = location.get('longitude')
+      if lon:
+        self.location['longitude'] = lon
+
+    contact_details = raw_data.get('contactDetails')
+    self.address = {}
+    if contact_details:
+      address = contact_details.get('address')
+      if address:
+        line1 = address.get('line1')
+        if line1:
+          self.address['line1'] = line1
+        line2 = address.get('line2')
+        if line2:
+          self.address['line2'] = line2
+        city = address.get('city')
+        if city:
+          self.address['city'] = city
+
+class Curzon:
+  API_BASE_URI: str = 'https://vwc.curzon.com/WSVistaWebClient/ocapi/v1'
+
+  def __init__(self) -> None:
+    self.ua = UserAgent()
+    self.headers: Dict[str, str] = {'User-Agent': str(self.ua.chrome)}
+
+  async def auth(self) -> bool:
+    response = requests.get('https://www.curzon.com', headers=self.headers)
+    match = re.search(r'"authToken":"(.+?)"', response.text)
+    if not match:
+      return False
+    token = match.group(1)
+    if not token:
+      return False
+    self.token = cast(str, token)
+    self.headers = {
+      **self.headers,
+      'Authorization': f'Bearer {self.token}'
+    }
+    return True
+
+  async def __api(self, route: str, headers: Optional[Dict[str, str]] = None, **kwargs) -> Tuple[Optional[Dict[Any, Any]], Optional[Exception]]:
+    if not self.token:
+      return (None, Exception('Not authenticated. Authenticate first using #auth().'))
+    if not route.startswith('/'):
+      route = f'/{route}'
+    if headers is None:
+      headers = {}
+    headers.update(self.headers)
+    try:
+      response = requests.get(f'{self.API_BASE_URI}{route}', headers=headers, **kwargs)
+      json = response.json()
+      return (json, None)
+    except Exception as e:
+      print(e)
+      return (None, e)
+
+  async def get_films(self) -> Dict[str, Film]:
+    json, error = await self.__api('films')
+    if error or not json:
+      return {}
+    cast_and_crew = cast(Dict[str, CastAndCrew], {})
+    for entity in json['relatedData']['castAndCrew']:
+      cast_and_crew[entity['id']] = CastAndCrew(entity)
+    ratings = cast(Dict[str, CensorRating], {})
+    for entity in json['relatedData']['censorRatings']:
+      ratings[entity['id']] = CensorRating(entity)
+    genres = cast(Dict[str, Genre], {})
+    for entity in json['relatedData']['genres']:
+      genres[entity['id']] = Genre(entity)
+    films = cast(Dict[str, Film], {})
+    for raw_film in json['films']:
+      films[raw_film['id']] = Film(raw_film, cast_and_crew, ratings, genres)
+    return films
+
+  async def get_sites(self) -> Dict[str, Site]:
+    json, error = await self.__api('sites')
+    if error or not json:
+      return {}
+    sites = cast(Dict[str, Site], {})
+    raw_sites = cast(List[dict], json.get('sites'))
+    if not raw_sites:
+      return {}
+    for entity in raw_sites:
+      sites[entity['id']] = Site(entity)
+    return sites
+
+async def main():
+  curzon = Curzon()
+  success = await curzon.auth()
+  if not success:
+    print('Auth token couldn\'t be obtained')
+    return
+  print('Auth token obtained')
+  # films = await curzon.get_films()
+  # sites = await curzon.get_sites()
+  # print(vars(sites['ALD1']))
+
+asyncio.run(main())
