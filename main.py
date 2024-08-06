@@ -1,4 +1,5 @@
 from typing import Dict, Tuple, Optional, Any, cast, List
+from types import SimpleNamespace
 from fake_useragent import UserAgent
 import requests
 import re
@@ -167,36 +168,43 @@ class Film:
 #     },
 #     "ianaTimeZoneName": "Europe/London"
 # }
+
+class SiteLocation:
+  def __init__(self, raw_data: dict) -> None:
+    lat = raw_data.get('latitude')
+    if lat:
+      self.latitude = lat
+    lon = raw_data.get('longitude')
+    if lon:
+      self.longitude = lon
+
+class SiteAddress:
+  def __init__(self, raw_data: dict) -> None:
+    line1 = raw_data.get('line1')
+    if line1:
+      self.line1 = line1
+    line2 = raw_data.get('line2')
+    if line2:
+      self.line2 = line2
+    city = raw_data.get('city')
+    if city:
+      self.city = city
+
 class Site:
-  def __init__(self, raw_data) -> None:
+  def __init__(self, raw_data: dict) -> None:
     self.id = cast(Optional[str], raw_data.get('id'))
     if raw_data.get('name'):
       self.name = cast(Optional[str], raw_data['name']['text'])
 
     location = raw_data.get('location')
-    self.location = {}
     if location:
-      lat = location.get('latitude')
-      if lat:
-        self.location['latitude'] = lat
-      lon = location.get('longitude')
-      if lon:
-        self.location['longitude'] = lon
+      self.location = SiteLocation(location)
 
     contact_details = raw_data.get('contactDetails')
-    self.address = {}
     if contact_details:
       address = contact_details.get('address')
       if address:
-        line1 = address.get('line1')
-        if line1:
-          self.address['line1'] = line1
-        line2 = address.get('line2')
-        if line2:
-          self.address['line2'] = line2
-        city = address.get('city')
-        if city:
-          self.address['city'] = city
+        self.address = SiteAddress(address)
 
 class Curzon:
   API_BASE_URI: str = 'https://vwc.curzon.com/WSVistaWebClient/ocapi/v1'
@@ -274,6 +282,7 @@ async def main():
     return
   print('Auth token obtained')
   # films = await curzon.get_films()
+  # print(vars(films['HO00005424']))
   # sites = await curzon.get_sites()
   # print(vars(sites['ALD1']))
 
