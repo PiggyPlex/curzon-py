@@ -38,6 +38,7 @@ async def main():
   print('Starts:', screenings[0].starts_at.strftime('%I:%M %p'))
   print('Film Starts:', screenings[0].film_starts_at.strftime('%I:%M %p'))
   print('Available Seats: ', end='')
+  # Find all available seats
   seats = await screenings[0].get_seats()
   available_seats = []
   for seat in seats:
@@ -51,5 +52,10 @@ async def main():
       text += ' (C)'
     return text
   print(', '.join(map(format_seat, available_seats)))
+
+  # Find the ticket price of an adult for this screening
+  ticket_types = await screenings[0].get_ticket_prices()
+  adult_ticket = next((ticket_type for ticket_type in ticket_types if ticket_type.name == 'Adult'), None)
+  print(f'Adult Ticket Price: £{adult_ticket.price:.2f}' if adult_ticket else 'Unknown')
 
 asyncio.run(main())

@@ -273,6 +273,77 @@ class Screening:
         break
     return seats
 
+  async def get_ticket_prices(self) -> List[TicketType]:
+    json, error = await self._curzon.api(f'showtimes/{self.id}/ticket-prices')
+    if error or not json:
+      return []
+
+    related_data = json.get('relatedData')
+    if not related_data:
+      return []
+    raw_ticket_types = related_data.get('ticketTypes')
+    if not raw_ticket_types:
+      return []
+
+    raw_ticket_prices = json.get('ticketPrices')
+    if not raw_ticket_prices:
+      return []
+
+    ticket_types = {}
+    for entity in raw_ticket_types:
+      id = entity.get('id')
+      if not id:
+        continue
+      ticket_types[id] = TicketType(entity)
+      # TODO: implement other ticket price properties
+      # Search for the associated ticket price
+      for raw_ticket_price in raw_ticket_prices:
+        if raw_ticket_price.get('ticketTypeId') != id:
+          continue
+        price = raw_ticket_price.get('price')
+        if not price:
+          break
+        price_including_vat = price.get('valueIncludingTax')
+        if not price_including_vat:
+          break
+        ticket_types[id].set_price(price_including_vat)
+        break
+
+    return list(ticket_types.values())
+
+# Example raw data:
+# {
+#     "type": "Normal",
+#     "id": "ALD1-0056",
+#     "description": {
+#         "text": "Adult",
+#         "translations": []
+#     },
+#     "longDescription": {
+#         "text": "An adult ticket applies to those aged 15+",
+#         "translations": []
+#     },
+#     "areaCategoryId": "ALD1-0000000002",
+#     "isRestrictedToMembers": false,
+#     "displayPriority": 0
+# }
+class TicketType:
+  def __init__(self, raw_data: dict) -> None:
+    self.id = cast(Optional[str], raw_data.get('id'))
+    self.type = cast(Optional[str], raw_data.get('type'))
+
+    if raw_data.get('description'):
+      self.name = cast(Optional[str], raw_data['description']['text'])
+    if raw_data.get('longDescription'):
+      self.description = cast(Optional[str], raw_data['longDescription']['text'])
+
+    self.area_category_id = cast(Optional[str], raw_data.get('areaCategoryId'))
+    self.is_restricted_to_members = cast(Optional[str], raw_data.get('isRestrictedToMembers'))
+    self.display_priority = cast(Optional[int], raw_data.get('displayPriority'))
+
+  def set_price(self, price: int) -> None:
+    self.price = price
+
 # Example raw data:
 # {
 #     "id": "1_1_1",
