@@ -164,7 +164,7 @@ class Film:
       return []
     screenings = cast(List[Screening], [])
     for entity in raw_screenings:
-      screenings.append(Screening(entity))
+      screenings.append(Screening(self._curzon, entity))
     return screenings
 
 # Example raw data:
@@ -190,7 +190,9 @@ class Film:
 #     "filmAdvanceBookingRuleId": null
 # }
 class Screening:
-  def __init__(self, raw_data: dict) -> None:
+  def __init__(self, curzon: Curzon, raw_data: dict) -> None:
+    self._curzon = curzon
+
     self.id = cast(Optional[str], raw_data.get('id'))
 
     schedule = cast(dict, raw_data.get('schedule'))
@@ -227,6 +229,95 @@ class Screening:
     # Unsure what this is used for. Type should be upadted if I find out.
     self.advance_booking_rule_id = cast(Optional[Any], raw_data.get('filmAdvanceBookingRuleId'))
     # TODO: implement attributes and event
+
+  async def get_seats(self) -> List[Seat]:
+    json, error = await self._curzon.api(f'showtimes/{self.id}/seat-layout')
+    if error or not json:
+      return []
+    raw_layout = json.get('seatLayout')
+    if not raw_layout:
+      return []
+    raw_areas = raw_layout.get('areas')
+    if not raw_areas:
+      return []
+    seats = cast(List[Seat], [])
+    for raw_area in raw_areas:
+      raw_rows = raw_area.get('rows')
+      if not raw_rows:
+        continue
+      for raw_row in raw_rows:
+        raw_seats = raw_row.get('seats')
+        if not raw_seats:
+          continue
+        for raw_seat in raw_seats:
+          seats.append(Seat(raw_seat))
+    # TODO: implement other properties
+
+    # Update seats
+    json, error = await self._curzon.api(f'showtimes/{self.id}/seat-availability')
+    if error or not json:
+      return []
+    raw_availabilities = json.get('seatAvailabilities')
+    if not raw_availabilities:
+      return []
+    for seat in seats:
+      for raw_availability in raw_availabilities:
+        if seat.id != raw_availability.get('seatId'):
+          continue
+        # Found: Seat id has matched this availability object
+        status = raw_availability.get('status')
+        if status:
+          seat.set_status(status)
+        # TODO: Remove this availability object
+        # Break from inner loop
+        break
+    return seats
+
+# Example raw data:
+# {
+#     "id": "1_1_1",
+#     "position": {
+#         "areaNumber": 1,
+#         "columnNumber": 1,
+#         "rowNumber": 1
+#     },
+#     "seatGroupIds": [
+#         "1_1_1",
+#         "1_1_2"
+#     ],
+#     "label": "14",
+#     "rowLabel": "F",
+#     "areaCategoryId": "ALD1-0000000002",
+#     "type": "SofaRight"
+# }
+class Seat:
+  def __init__(self, raw_data: dict) -> None:
+    self.id = cast(Optional[str], raw_data.get('id'))
+
+    self.status: str = 'Unknown'
+
+    position = raw_data.get('position')
+    if position:
+      self.area_number = cast(Optional[int], position.get('areaNumber'))
+      self.column_number = cast(Optional[int], position.get('columnNumber'))
+      self.row_number = cast(Optional[int], position.get('rowNumber'))
+
+    group_ids = raw_data.get('seatGroupIds')
+    if group_ids:
+      self.grouped_seat_ids = cast(List[str], group_ids)
+
+    self.column = cast(Optional[str], raw_data.get('label'))
+    self.row = cast(Optional[str], raw_data.get('rowLabel'))
+    if self.column and self.row:
+      self.name = f'{self.row}{self.column}'
+    else:
+      self.name = ''
+
+    self.area_category_id = cast(Optional[str], raw_data.get('areaCategoryId'))
+    self.type = cast(Optional[str], raw_data.get('type'))
+
+  def set_status(self, status: str) -> None:
+    self.status = status
 
 # Example raw data:
 # {
