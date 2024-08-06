@@ -355,21 +355,3 @@ class Curzon:
     for entity in raw_sites:
       sites[entity['id']] = Site(entity)
     return sites
-
-async def main():
-  curzon = Curzon()
-  success = await curzon.auth()
-  if not success:
-    print('Auth token couldn\'t be obtained')
-    return
-  print('Auth token obtained')
-  sites = await curzon.get_sites()
-  # print(vars(sites['ALD1']))
-  site = sites['ALD1']
-  films = await curzon.get_films()
-  film = films['HO00005424']
-  screenings = await film.get_screenings(site, '2024-08-06')
-  print(vars(screenings[0]))
-  # print(vars(films['HO00005424']))
-
-asyncio.run(main())
