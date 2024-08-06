@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import Dict, Tuple, Optional, Any, cast, List
 from types import SimpleNamespace
 from fake_useragent import UserAgent
@@ -5,6 +6,7 @@ import requests
 import re
 import asyncio
 from json import dump
+from dateutil import parser
 
 # Example raw data:
 # {'id': '0000000146', 'name': {'givenName': 'Martin', 'familyName': 'Sheen', 'middleName': None}}
@@ -93,7 +95,9 @@ class Genre:
 # }
 class Film:
   # Data passed through from Curzon via dependency injection
-  def __init__(self, raw_data: dict, all_cast_and_crew: Dict[str, CastAndCrew], ratings: Dict[str, CensorRating], all_genres: Dict[str, Genre]) -> None:
+  def __init__(self, curzon: Curzon, raw_data: dict, all_cast_and_crew: Dict[str, CastAndCrew], ratings: Dict[str, CensorRating], all_genres: Dict[str, Genre]) -> None:
+    self._curzon = curzon
+
     self.id = cast(Optional[str], raw_data.get('id'))
     self.title = cast(Optional[str], raw_data.get('title', {}).get('text') if raw_data.get('title') else None)
     self.synopsis = cast(Optional[str], raw_data.get('synopsis', {}).get('text') if raw_data.get('synopsis') else None)
@@ -145,6 +149,84 @@ class Film:
 
     self.distributor = cast(Optional[str], raw_data.get('distributorName'))
     # TODO: implement event
+
+  async def get_screenings(self, site: Site, date: str) -> List[Screening]:
+    if not site.id:
+      return []
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
+      print('Invalid date.')
+      return []
+    json, error = await self._curzon.api(f'showtimes/by-business-date/{date}?siteIds={site.id}&filmIds={self.id}')
+    if error or not json:
+      return []
+    raw_screenings = json.get('showtimes')
+    if not raw_screenings:
+      return []
+    screenings = cast(List[Screening], [])
+    for entity in raw_screenings:
+      screenings.append(Screening(entity))
+    return screenings
+
+# Example raw data:
+# {
+#     "id": "ALD1-50641",
+#     "schedule": {
+#         "businessDate": "2024-08-06",
+#         "startsAt": "2024-08-06T11:00:00+01:00",
+#         "endsAt": "2024-08-06T13:33:00+01:00",
+#         "filmStartsAt": "2024-08-06T11:25:00+01:00",
+#         "filmEndsAt": "2024-08-06T13:33:00+01:00"
+#     },
+#     "isSoldOut": false,
+#     "seatLayoutId": 3,
+#     "filmId": "HO00005424",
+#     "siteId": "ALD1",
+#     "screenId": "ALD1-3",
+#     "attributeIds": [],
+#     "isAllocatedSeating": true,
+#     "requires3dGlasses": false,
+#     "eventId": null,
+#     "restrictions": [],
+#     "filmAdvanceBookingRuleId": null
+# }
+class Screening:
+  def __init__(self, raw_data: dict) -> None:
+    self.id = cast(Optional[str], raw_data.get('id'))
+
+    schedule = cast(dict, raw_data.get('schedule'))
+    if schedule:
+      self.date = schedule.get('businessDate')
+      starts_at = schedule.get('startsAt')
+      if starts_at:
+        self.starts_at = parser.parse(starts_at)
+      ends_at = schedule.get('endsAt')
+      if ends_at:
+        self.ends_at = parser.parse(ends_at)
+      film_starts_at = schedule.get('filmStartsAt')
+      if film_starts_at:
+        self.film_starts_at = parser.parse(film_starts_at)
+      film_ends_at = schedule.get('filmEndsAt')
+      if film_ends_at:
+        self.film_ends_at = parser.parse(film_ends_at)
+
+    self.is_sold_out = cast(bool, raw_data.get('is_sold_out', False) or False)
+    self.seat_layout_id = cast(Optional[int], raw_data.get('seatLayoutId'))
+
+    self.film_id = cast(Optional[str], raw_data.get('filmId'))
+    self.site_id = cast(Optional[str], raw_data.get('siteid'))
+    self.screenId = cast(Optional[str], raw_data.get('screenId'))
+    if self.screenId:
+      match = re.search(r'.*-(\d+)$', self.screenId)
+      if match:
+        self.screen: str = match.group(1)
+
+    self.is_allocated_seating = cast(bool, raw_data.get('isAllocatedSeating', False) or False)
+    self.requires_3d_glasses = cast(bool, raw_data.get('requires3dGlasses', False) or False)
+
+    self.restrictions = cast(list, raw_data.get('restrictions', []) or [])
+    # Unsure what this is used for. Type should be upadted if I find out.
+    self.advance_booking_rule_id = cast(Optional[Any], raw_data.get('filmAdvanceBookingRuleId'))
+    # TODO: implement attributes and event
 
 # Example raw data:
 # {
@@ -228,7 +310,7 @@ class Curzon:
     }
     return True
 
-  async def __api(self, route: str, headers: Optional[Dict[str, str]] = None, **kwargs) -> Tuple[Optional[Dict[Any, Any]], Optional[Exception]]:
+  async def api(self, route: str, headers: Optional[Dict[str, str]] = None, **kwargs) -> Tuple[Optional[Dict[Any, Any]], Optional[Exception]]:
     if not self.token:
       return (None, Exception('Not authenticated. Authenticate first using #auth().'))
     if not route.startswith('/'):
@@ -245,7 +327,7 @@ class Curzon:
       return (None, e)
 
   async def get_films(self) -> Dict[str, Film]:
-    json, error = await self.__api('films')
+    json, error = await self.api('films')
     if error or not json:
       return {}
     cast_and_crew = cast(Dict[str, CastAndCrew], {})
@@ -259,11 +341,11 @@ class Curzon:
       genres[entity['id']] = Genre(entity)
     films = cast(Dict[str, Film], {})
     for raw_film in json['films']:
-      films[raw_film['id']] = Film(raw_film, cast_and_crew, ratings, genres)
+      films[raw_film['id']] = Film(self, raw_film, cast_and_crew, ratings, genres)
     return films
 
   async def get_sites(self) -> Dict[str, Site]:
-    json, error = await self.__api('sites')
+    json, error = await self.api('sites')
     if error or not json:
       return {}
     sites = cast(Dict[str, Site], {})
@@ -281,9 +363,13 @@ async def main():
     print('Auth token couldn\'t be obtained')
     return
   print('Auth token obtained')
-  # films = await curzon.get_films()
-  # print(vars(films['HO00005424']))
-  # sites = await curzon.get_sites()
+  sites = await curzon.get_sites()
   # print(vars(sites['ALD1']))
+  site = sites['ALD1']
+  films = await curzon.get_films()
+  film = films['HO00005424']
+  screenings = await film.get_screenings(site, '2024-08-06')
+  print(vars(screenings[0]))
+  # print(vars(films['HO00005424']))
 
 asyncio.run(main())
