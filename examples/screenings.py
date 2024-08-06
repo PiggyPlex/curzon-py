@@ -32,4 +32,24 @@ async def main():
   for screening in screenings:
     print('Screen', screening.screen, 'at', screening.starts_at.strftime('%I:%M %p'))
 
+  print('=' * 20)
+  print('First Screening:')
+  print('Screen:', screenings[0].screen)
+  print('Starts:', screenings[0].starts_at.strftime('%I:%M %p'))
+  print('Film Starts:', screenings[0].film_starts_at.strftime('%I:%M %p'))
+  print('Available Seats: ', end='')
+  seats = await screenings[0].get_seats()
+  available_seats = []
+  for seat in seats:
+    if seat.status == 'Available':
+      available_seats.append(seat)
+  def format_seat(seat):
+    text = seat.name
+    if seat.type == 'Wheelchair':
+      text += ' (W)'
+    if seat.type == 'Companion':
+      text += ' (C)'
+    return text
+  print(', '.join(map(format_seat, available_seats)))
+
 asyncio.run(main())
